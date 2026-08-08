@@ -55,11 +55,69 @@ export type UsStateCode = (typeof usStateCodes)[number];
 
 const stateCodeSet = new Set<string>(usStateCodes);
 
+const stateNameToCodeMap: Record<string, UsStateCode> = {
+  ALABAMA: 'AL',
+  ALASKA: 'AK',
+  ARIZONA: 'AZ',
+  ARKANSAS: 'AR',
+  CALIFORNIA: 'CA',
+  COLORADO: 'CO',
+  CONNECTICUT: 'CT',
+  DELAWARE: 'DE',
+  FLORIDA: 'FL',
+  GEORGIA: 'GA',
+  HAWAII: 'HI',
+  IDAHO: 'ID',
+  ILLINOIS: 'IL',
+  INDIANA: 'IN',
+  IOWA: 'IA',
+  KANSAS: 'KS',
+  KENTUCKY: 'KY',
+  LOUISIANA: 'LA',
+  MAINE: 'ME',
+  MARYLAND: 'MD',
+  MASSACHUSETTS: 'MA',
+  MICHIGAN: 'MI',
+  MINNESOTA: 'MN',
+  MISSISSIPPI: 'MS',
+  MISSOURI: 'MO',
+  MONTANA: 'MT',
+  NEBRASKA: 'NE',
+  NEVADA: 'NV',
+  NEWHAMPSHIRE: 'NH',
+  NEWJERSEY: 'NJ',
+  NEWMEXICO: 'NM',
+  NEWYORK: 'NY',
+  NORTHCAROLINA: 'NC',
+  NORTHDAKOTA: 'ND',
+  OHIO: 'OH',
+  OKLAHOMA: 'OK',
+  OREGON: 'OR',
+  PENNSYLVANIA: 'PA',
+  RHODEISLAND: 'RI',
+  SOUTHCAROLINA: 'SC',
+  SOUTHDAKOTA: 'SD',
+  TENNESSEE: 'TN',
+  TEXAS: 'TX',
+  UTAH: 'UT',
+  VERMONT: 'VT',
+  VIRGINIA: 'VA',
+  WASHINGTON: 'WA',
+  WESTVIRGINIA: 'WV',
+  WISCONSIN: 'WI',
+  WYOMING: 'WY',
+};
+
 export const normalizeUsStateCode = (value?: string | null): UsStateCode | undefined => {
-  const normalized = value?.trim().toUpperCase();
-  if (!normalized || !stateCodeSet.has(normalized)) {
-    return undefined;
+  if (!value) return undefined;
+  const normalized = value.trim().toUpperCase();
+  if (stateCodeSet.has(normalized)) {
+    return normalized as UsStateCode;
+  }
+  const cleanName = normalized.replace(/[^A-Z]/g, '');
+  if (stateNameToCodeMap[cleanName]) {
+    return stateNameToCodeMap[cleanName];
   }
 
-  return normalized as UsStateCode;
+  return undefined;
 };

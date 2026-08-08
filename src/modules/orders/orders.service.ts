@@ -83,6 +83,31 @@ const sizeLabelFromBytes = (size?: number, fallback?: string): string => {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const orderNumberVariantsFor = (orderNumber: string): string[] => {
+  const trimmed = orderNumber.trim();
+  const withHash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
+  const withoutHash = trimmed.replace(/^#/, '');
+  return [trimmed, withHash, withoutHash];
+};
+
+const hasPrintableDocumentsForOrder = async (order: IOrder): Promise<boolean> => {
+  if (order.documents.some((document) => document.uploadedBy !== 'Notary')) {
+    return true;
+  }
+
+  const printableDocument = await ClosingDocument.findOne({
+    $or: [
+      { orderNumber: { $in: orderNumberVariantsFor(order.orderNumber) } },
+      { orderId: order._id },
+    ],
+    uploaderRole: { $in: ['admin', 'company', 'title-company'] },
+  })
+    .select('_id')
+    .lean();
+
+  return Boolean(printableDocument);
+};
+
 const normalizeCity = (value?: string | null): string =>
   value
     ?.trim()
@@ -108,6 +133,31 @@ const extractCityFromPropertyAddress = (propertyAddress?: string | null): string
 
 const resolveOrderCity = (order: Pick<IOrder, 'city' | 'propertyAddress'>): string =>
   order.city?.trim() || extractCityFromPropertyAddress(order.propertyAddress);
+
+const extractStateFromPropertyAddress = (propertyAddress?: string | null): string => {
+  if (!propertyAddress) return '';
+
+  const segments = propertyAddress
+    .split(',')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  for (const segment of segments) {
+    const directCode = normalizeUsStateCode(segment);
+    if (directCode) return directCode;
+
+    const parts = segment.split(/\s+/).filter(Boolean);
+    for (const part of parts) {
+      const code = normalizeUsStateCode(part);
+      if (code) return code;
+    }
+  }
+
+  return '';
+};
+
+export const resolveOrderState = (order: Pick<IOrder, 'state' | 'propertyAddress'>): string =>
+  order.state?.trim() || extractStateFromPropertyAddress(order.propertyAddress);
 
 const doesNotaryServiceAreaMatchCity = (serviceArea: string | undefined, city: string): boolean => {
   const normalizedCity = normalizeCity(city);
@@ -254,10 +304,7 @@ export const serializeOrderRow = (order: IOrder): OrderRow => [
 ];
 
 export const serializeOrderDetail = async (order: IOrder) => {
-  const orderNumTrimmed = order.orderNumber.trim();
-  const withHash = orderNumTrimmed.startsWith('#') ? orderNumTrimmed : `#${orderNumTrimmed}`;
-  const withoutHash = orderNumTrimmed.replace(/^#/, '');
-  const orderNumberVariants = [orderNumTrimmed, withHash, withoutHash];
+  const orderNumberVariants = orderNumberVariantsFor(order.orderNumber);
   const closingDocs = await ClosingDocument.find({
     $or: [
       { orderNumber: { $in: orderNumberVariants } },
@@ -332,7 +379,7 @@ export const serializeOrderDetail = async (order: IOrder) => {
     companyId: order.companyId?.toString() ?? '',
     clientName: order.clientName || order.signerName || '',
     city: resolveOrderCity(order),
-    state: order.state ?? '',
+    state: resolveOrderState(order),
     signerName: order.signerName ?? '',
     signerPhone: order.signerPhone ?? '',
     propertyAddress: order.propertyAddress,
@@ -375,7 +422,7 @@ const serializePortalOrder = (order: IOrder) => ({
   companyName: order.titleCompany,
   propertyAddress: order.propertyAddress,
   city: resolveOrderCity(order),
-  state: order.state ?? '',
+  state: resolveOrderState(order),
   location: order.propertyAddress,
   notary: order.assignedNotaryName === 'Unassigned' ? '--' : order.assignedNotaryName,
   status: order.status,
@@ -947,6 +994,15 @@ export const confirmNotaryPrintedDocuments = async (auth: AuthContext, id: strin
   }
 
   const order = await findOrder(id, auth);
+  const hasPrintableDocuments = await hasPrintableDocumentsForOrder(order);
+
+  if (order.openForAll || order.assignedNotaryId?.toString() !== auth.id) {
+    throw new HttpError(StatusCodes.FORBIDDEN, 'You can confirm printed documents only after accepting the order');
+  }
+
+  if (!hasPrintableDocuments) {
+    throw new HttpError(StatusCodes.CONFLICT, 'Printable documents are not available for this order yet');
+  }
 
   if (!order.notaryPrintedConfirmed) {
     order.notaryPrintedConfirmed = true;
