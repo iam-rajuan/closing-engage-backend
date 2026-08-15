@@ -108,14 +108,6 @@ const hasPrintableDocumentsForOrder = async (order: IOrder): Promise<boolean> =>
   return Boolean(printableDocument);
 };
 
-const normalizeCity = (value?: string | null): string =>
-  value
-    ?.trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim() || '';
-
 const extractCityFromPropertyAddress = (propertyAddress?: string | null): string => {
   if (!propertyAddress) return '';
 
@@ -158,16 +150,6 @@ const extractStateFromPropertyAddress = (propertyAddress?: string | null): strin
 
 export const resolveOrderState = (order: Pick<IOrder, 'state' | 'propertyAddress'>): string =>
   order.state?.trim() || extractStateFromPropertyAddress(order.propertyAddress);
-
-const doesNotaryServiceAreaMatchCity = (serviceArea: string | undefined, city: string): boolean => {
-  const normalizedCity = normalizeCity(city);
-  if (!normalizedCity) return false;
-
-  const normalizedServiceArea = normalizeCity(serviceArea);
-  if (!normalizedServiceArea) return false;
-
-  return normalizedServiceArea.includes(normalizedCity);
-};
 
 type OpenOrderNotificationRecipient = {
   _id: Types.ObjectId;
