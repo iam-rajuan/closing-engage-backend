@@ -449,15 +449,26 @@ export const getDocument = async (auth: AuthContext, id: string) => {
 };
 
 const NOTARY_DELETABLE_STATUSES: DocumentStatus[] = ['Submitted', 'Rejected', 'Pending Review', 'Pending'];
+const COMPANY_DELETABLE_STATUSES: DocumentStatus[] = ['Submitted', 'Rejected', 'Pending Review', 'Pending'];
 
 export const deleteDocument = async (auth: AuthContext, id: string) => {
-  if (auth.role === 'company') {
-    throw new HttpError(StatusCodes.FORBIDDEN, 'You do not have permission to delete documents');
-  }
-
   const document = await ClosingDocument.findById(id);
   if (!document) {
     throw new HttpError(StatusCodes.NOT_FOUND, 'Document not found');
+  }
+
+  if (auth.role === 'company') {
+    const isOwner =
+      (document.uploaderRole === 'company' || document.uploaderRole === 'title-company') &&
+      document.uploadedBy?.toString() === auth.id;
+
+    if (!isOwner) {
+      throw new HttpError(StatusCodes.FORBIDDEN, 'You can only delete your own title documents');
+    }
+
+    if (!COMPANY_DELETABLE_STATUSES.includes(document.status)) {
+      throw new HttpError(StatusCodes.FORBIDDEN, 'Approved documents are locked and cannot be deleted');
+    }
   }
 
   if (auth.role === 'notary') {
