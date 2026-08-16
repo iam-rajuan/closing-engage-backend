@@ -180,6 +180,23 @@ const pushTimeline = (order: IOrder, title: string, tone: 'blue' | 'slate' | 'gr
   order.timeline.unshift({ title, date: new Date(), tone });
 };
 
+const resolveOrderFees = (order: Pick<IOrder, 'companyFee' | 'notaryFee' | 'price'>) => {
+  const companyFee = order.companyFee ?? order.price ?? null;
+  const notaryFee = order.notaryFee ?? order.price ?? null;
+  const closingEngageRevenue =
+    typeof companyFee === 'number' && typeof notaryFee === 'number'
+      ? Number((companyFee - notaryFee).toFixed(2))
+      : null;
+
+  return { companyFee, notaryFee, closingEngageRevenue };
+};
+
+const visibleOrderPriceForRole = (role: AuthContext['role'], order: Pick<IOrder, 'companyFee' | 'notaryFee' | 'price'>) => {
+  const { companyFee, notaryFee } = resolveOrderFees(order);
+  if (role === 'notary') return notaryFee;
+  return companyFee;
+};
+
 const serializeMeeting = (meeting?: IOrderMeeting | null) =>
   meeting
     ? {
@@ -198,8 +215,33 @@ const serializeMeeting = (meeting?: IOrderMeeting | null) =>
       }
     : null;
 
+type PortalOrderRecord = {
+  id: string;
+  clientName: string;
+  companyName: string;
+  propertyAddress: string;
+  city: string;
+  state: string;
+  location: string;
+  notary: string;
+  status: OrderStatus;
+  date: string;
+  time: string;
+  price: number | null;
+  pricing: number | null;
+  loanType: string;
+  scanbacksRequired: boolean;
+  preferredNotaryName: string;
+  notaryPrintedConfirmed: boolean;
+  openForAll: boolean;
+  meeting: ReturnType<typeof serializeMeeting>;
+  companyFee?: number | null;
+  notaryFee?: number | null;
+  closingEngageRevenue?: number | null;
+};
+
 const enrichPortalOrderWithCompany = (
-  order: ReturnType<typeof serializePortalOrder>,
+  order: PortalOrderRecord,
   company?: { companyName?: string; avatarUrl?: string },
 ) => ({
   ...order,
@@ -285,8 +327,10 @@ export const serializeOrderRow = (order: IOrder): OrderRow => [
   order.priority,
 ];
 
-export const serializeOrderDetail = async (order: IOrder) => {
+export const serializeOrderDetail = async (order: IOrder, role: AuthContext['role'] = 'admin') => {
   const orderNumberVariants = orderNumberVariantsFor(order.orderNumber);
+  const { companyFee, notaryFee, closingEngageRevenue } = resolveOrderFees(order);
+  const visiblePrice = visibleOrderPriceForRole(role, order);
   const closingDocs = await ClosingDocument.find({
     $or: [
       { orderNumber: { $in: orderNumberVariants } },
@@ -370,8 +414,11 @@ export const serializeOrderDetail = async (order: IOrder) => {
     date: order.signingDate,
     signingTime: order.signingTime,
     time: order.signingTime,
-    price: order.price ?? null,
-    pricing: order.price ?? null,
+    price: visiblePrice,
+    pricing: visiblePrice,
+    companyFee: role !== 'notary' ? companyFee : undefined,
+    notaryFee: role !== 'company' ? notaryFee : undefined,
+    closingEngageRevenue: role === 'admin' ? closingEngageRevenue : undefined,
     loanType: order.loanType ?? '',
     scanbacksRequired: order.scanbacksRequired,
     status: order.status,
@@ -398,7 +445,11 @@ export const serializeOrderDetail = async (order: IOrder) => {
   };
 };
 
-const serializePortalOrder = (order: IOrder) => ({
+const serializePortalOrder = (order: IOrder, role: AuthContext['role']): PortalOrderRecord => {
+  const { companyFee, notaryFee, closingEngageRevenue } = resolveOrderFees(order);
+  const visiblePrice = visibleOrderPriceForRole(role, order);
+
+  return {
   id: order.orderNumber,
   clientName: order.clientName || order.signerName || '',
   companyName: order.titleCompany,
@@ -410,15 +461,19 @@ const serializePortalOrder = (order: IOrder) => ({
   status: order.status,
   date: order.signingDate,
   time: order.signingTime,
-  price: order.price ?? null,
-  pricing: order.price ?? null,
+  price: visiblePrice,
+  pricing: visiblePrice,
+  companyFee: role !== 'notary' ? companyFee : undefined,
+  notaryFee: role !== 'company' ? notaryFee : undefined,
+  closingEngageRevenue: role === 'admin' ? closingEngageRevenue : undefined,
   loanType: order.loanType ?? '',
   scanbacksRequired: order.scanbacksRequired,
   preferredNotaryName: order.preferredNotaryName ?? '',
   notaryPrintedConfirmed: order.notaryPrintedConfirmed ?? false,
   openForAll: order.openForAll,
   meeting: serializeMeeting(order.meeting),
-});
+  };
+};
 
 export const listOrders = async (auth: AuthContext, filters: { status?: OrderStatus; search?: string }) => {
   assertCompanyPermission(auth, 'viewOrders', 'You do not have permission to view orders');
@@ -453,7 +508,12 @@ export const listOrders = async (auth: AuthContext, filters: { status?: OrderSta
     companies.map((company) => [String(company._id), { companyName: company.companyName, avatarUrl: company.avatarUrl ?? '' }]),
   );
 
-  return orders.map((order) => enrichPortalOrderWithCompany(serializePortalOrder(order), order.companyId ? companyMap.get(order.companyId.toString()) : undefined));
+  return orders.map((order) =>
+    enrichPortalOrderWithCompany(
+      serializePortalOrder(order, auth.role),
+      order.companyId ? companyMap.get(order.companyId.toString()) : undefined,
+    ),
+  );
 };
 
 type OrderDocumentInput = Pick<IOrderDocument, 'name' | 'meta'> & {
@@ -475,6 +535,8 @@ export const createOrder = async (auth: AuthContext, payload: {
   signingDate: string;
   signingTime: string;
   price?: number;
+  companyFee?: number;
+  notaryFee?: number;
   loanType?: LoanType;
   scanbacksRequired?: boolean;
   status: OrderStatus;
@@ -515,6 +577,11 @@ export const createOrder = async (auth: AuthContext, payload: {
     companyInitials = initialsFrom(company.companyName);
   }
 
+  const companyFee = payload.companyFee ?? payload.price;
+  const notaryFee =
+    payload.notaryFee ?? (auth.role === 'company' ? companyFee : payload.companyFee ?? payload.price);
+  const legacyPrice = companyFee ?? notaryFee;
+
   const order = await Order.create({
     orderNumber,
     title: payload.title,
@@ -536,7 +603,9 @@ export const createOrder = async (auth: AuthContext, payload: {
       scheduledByRole: auth.role,
       scheduledAt: new Date(),
     },
-    price: payload.price,
+    price: legacyPrice,
+    companyFee,
+    notaryFee,
     loanType: payload.loanType,
     scanbacksRequired: payload.scanbacksRequired ?? false,
     status: payload.status,
@@ -615,7 +684,7 @@ export const createOrder = async (auth: AuthContext, payload: {
     });
   }
 
-  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order);
+  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order, auth.role);
 };
 
 export const getOrder = async (auth: AuthContext, id: string) => {
@@ -624,7 +693,7 @@ export const getOrder = async (auth: AuthContext, id: string) => {
     order.companyId ? await CompanyUser.findById(order.companyId).select('companyName avatarUrl').lean() : null;
 
   return {
-    ...(await serializeOrderDetail(order)),
+    ...(await serializeOrderDetail(order, auth.role)),
     companyName: company?.companyName || order.titleCompany,
     companyAvatarUrl: company?.avatarUrl ?? '',
   };
@@ -645,6 +714,8 @@ export const updateOrder = async (
     signingDate: string;
     signingTime: string;
     price?: number;
+    companyFee?: number;
+    notaryFee?: number;
     loanType?: LoanType;
     scanbacksRequired?: boolean;
     status: OrderStatus;
@@ -671,6 +742,10 @@ export const updateOrder = async (
     throw new HttpError(StatusCodes.FORBIDDEN, 'Company users cannot update order status');
   }
 
+  if (auth.role === 'company' && payload.notaryFee !== undefined) {
+    throw new HttpError(StatusCodes.FORBIDDEN, 'Company users cannot change the notary fee');
+  }
+
   if (payload.title !== undefined) order.title = payload.title;
   if (payload.titleCompany !== undefined) {
     if (auth.role !== 'admin') {
@@ -693,7 +768,27 @@ export const updateOrder = async (
   if (payload.signerPhone !== undefined) order.signerPhone = payload.signerPhone;
   if (payload.signingDate !== undefined) order.signingDate = payload.signingDate;
   if (payload.signingTime !== undefined) order.signingTime = payload.signingTime;
-  if (payload.price !== undefined) order.price = payload.price;
+  const currentFees = resolveOrderFees(order);
+  if (payload.companyFee !== undefined) {
+    order.companyFee = payload.companyFee;
+  } else if (payload.price !== undefined && auth.role === 'company') {
+    order.companyFee = payload.price;
+  }
+  if (payload.notaryFee !== undefined) {
+    if (auth.role !== 'admin') {
+      throw new HttpError(StatusCodes.FORBIDDEN, 'Only admins can change the notary fee');
+    }
+    order.notaryFee = payload.notaryFee;
+  } else if (payload.price !== undefined && auth.role === 'admin') {
+    order.notaryFee = payload.price;
+  }
+  if (order.companyFee === undefined && currentFees.companyFee !== null) {
+    order.companyFee = currentFees.companyFee;
+  }
+  if (order.notaryFee === undefined && currentFees.notaryFee !== null) {
+    order.notaryFee = currentFees.notaryFee;
+  }
+  order.price = order.companyFee ?? order.notaryFee ?? payload.price ?? order.price;
   if (payload.loanType !== undefined) order.loanType = payload.loanType;
   if (payload.scanbacksRequired !== undefined) order.scanbacksRequired = payload.scanbacksRequired;
   if (payload.status !== undefined && payload.status !== order.status) {
@@ -721,7 +816,7 @@ export const updateOrder = async (
   }
 
   await order.save();
-  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order);
+  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order, auth.role);
 };
 
 export const deleteOrder = async (auth: AuthContext, id: string): Promise<void> => {
@@ -745,7 +840,7 @@ export const updateOrderStatus = async (auth: AuthContext, id: string, status: O
   order.status = status;
   pushTimeline(order, `Order status changed to "${status}"`, status === 'Rejected' ? 'red' : 'blue');
   await order.save();
-  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order);
+  return auth.role === 'admin' ? serializeOrderRow(order) : serializePortalOrder(order, auth.role);
 };
 
 export const assignNotary = async (
@@ -793,7 +888,8 @@ export const assignNotary = async (
 
     await order.save();
 
-    const priceTag = typeof order.price === 'number' && order.price > 0 ? ` ($${order.price.toFixed(2)})` : '';
+    const { notaryFee } = resolveOrderFees(order);
+    const priceTag = typeof notaryFee === 'number' && notaryFee > 0 ? ` ($${notaryFee.toFixed(2)})` : '';
     const openOrderMessage =
       `${order.orderNumber}${priceTag} is open for all notaries. Claim it from your notifications before another notary accepts it.`;
 
@@ -914,7 +1010,7 @@ export const acceptOpenOrder = async (auth: AuthContext, id: string) => {
       linkId: alreadyAssignedToMe.orderNumber,
       type: 'order',
     });
-    return serializePortalOrder(alreadyAssignedToMe);
+    return serializePortalOrder(alreadyAssignedToMe, auth.role);
   }
 
   const claimedOrder = await Order.findOneAndUpdate(
@@ -967,7 +1063,7 @@ export const acceptOpenOrder = async (auth: AuthContext, id: string) => {
     linkId: claimedOrder.orderNumber,
   });
 
-  return serializePortalOrder(claimedOrder);
+  return serializePortalOrder(claimedOrder, auth.role);
 };
 
 export const confirmNotaryPrintedDocuments = async (auth: AuthContext, id: string) => {
@@ -1010,7 +1106,7 @@ export const confirmNotaryPrintedDocuments = async (auth: AuthContext, id: strin
     });
   }
 
-  return await serializeOrderDetail(order);
+  return await serializeOrderDetail(order, auth.role);
 };
 
 export const scheduleOrderMeeting = async (
@@ -1068,7 +1164,7 @@ export const scheduleOrderMeeting = async (
     linkId: order.orderNumber,
   });
 
-  return await serializeOrderDetail(order);
+  return await serializeOrderDetail(order, auth.role);
 };
 
 export const confirmOrderMeeting = async (auth: AuthContext, id: string) => {
@@ -1079,7 +1175,7 @@ export const confirmOrderMeeting = async (auth: AuthContext, id: string) => {
   }
 
   if (order.meeting.status === 'confirmed') {
-    return await serializeOrderDetail(order);
+    return await serializeOrderDetail(order, auth.role);
   }
 
   if (auth.role !== 'notary') {
@@ -1142,7 +1238,7 @@ export const confirmOrderMeeting = async (auth: AuthContext, id: string) => {
     linkId: order.orderNumber,
   });
 
-  return await serializeOrderDetail(order);
+  return await serializeOrderDetail(order, auth.role);
 };
 
 export const rejectOrderMeeting = async (
@@ -1215,10 +1311,10 @@ export const rejectOrderMeeting = async (
     linkId: order.orderNumber,
   });
 
-  return await serializeOrderDetail(order);
+  return await serializeOrderDetail(order, auth.role);
 };
 
 export const listOrderTimeline = async (auth: AuthContext, id: string) => {
   const order = await findOrder(id, auth);
-  return (await serializeOrderDetail(order)).timeline;
+  return (await serializeOrderDetail(order, auth.role)).timeline;
 };

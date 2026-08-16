@@ -61,6 +61,8 @@ const orderPayloadSchema = z.object({
   price: z.coerce.number().min(0).optional(),
   pricing: z.coerce.number().min(0).optional(),
   orderPrice: z.coerce.number().min(0).optional(),
+  companyFee: z.coerce.number().min(0).optional(),
+  notaryFee: z.coerce.number().min(0).optional(),
   signerName: z.string().trim().optional(),
   signerPhone: z.string().trim().optional(),
   signingDate: z.string().trim().optional(),
@@ -132,7 +134,8 @@ const normalizeOrderPayload = (payload: z.infer<typeof orderPayloadSchema>) => {
   const preferredNotary = payload.preferredNotary?.trim();
   const city = payload.city?.trim();
   const state = normalizeUsStateCode(payload.state);
-  const price = payload.price ?? payload.pricing ?? payload.orderPrice;
+  const companyFee = payload.companyFee ?? payload.price ?? payload.pricing ?? payload.orderPrice;
+  const notaryFee = payload.notaryFee;
 
   if (!propertyAddress) {
     throw new HttpError(StatusCodes.BAD_REQUEST, 'Property address is required');
@@ -150,7 +153,9 @@ const normalizeOrderPayload = (payload: z.infer<typeof orderPayloadSchema>) => {
     ...payload,
     city,
     state,
-    price,
+    price: companyFee,
+    companyFee,
+    notaryFee,
     propertyAddress,
     signingDate,
     signingTime: payload.signingTime || 'TBD',
@@ -178,7 +183,8 @@ const normalizeOrderUpdatePayload = (payload: z.infer<typeof orderUpdatePayloadS
   const preferredNotary = payload.preferredNotary?.trim();
   const city = payload.city?.trim();
   const state = normalizeUsStateCode(payload.state);
-  const price = payload.price ?? payload.pricing ?? payload.orderPrice;
+  const companyFee = payload.companyFee ?? payload.price ?? payload.pricing ?? payload.orderPrice;
+  const notaryFee = payload.notaryFee;
 
   if (payload.state !== undefined && !state) {
     throw new HttpError(StatusCodes.BAD_REQUEST, 'Valid US state is required');
@@ -188,7 +194,8 @@ const normalizeOrderUpdatePayload = (payload: z.infer<typeof orderUpdatePayloadS
     ...payload,
     ...(city !== undefined ? { city } : {}),
     ...(payload.state !== undefined ? { state } : {}),
-    ...(price !== undefined ? { price } : {}),
+    ...(companyFee !== undefined ? { price: companyFee, companyFee } : {}),
+    ...(notaryFee !== undefined ? { notaryFee } : {}),
     ...(propertyAddress ? { propertyAddress } : {}),
     ...(signingDate ? { signingDate } : {}),
     ...(payload.signingTime ? { signingTime: payload.signingTime } : {}),

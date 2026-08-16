@@ -119,6 +119,17 @@ const assertOrderScope = async (auth: AuthContext, orderIdentifier?: string) => 
   return order;
 };
 
+const assertCompanyUploadAllowed = (auth: AuthContext, order: Awaited<ReturnType<typeof assertOrderScope>>) => {
+  if (auth.role !== 'company' || !order) return;
+
+  if (!order.assignedNotaryId && !order.openForAll) {
+    throw new HttpError(
+      StatusCodes.FORBIDDEN,
+      'Title-company documents can be uploaded only after the order is assigned or opened to notaries',
+    );
+  }
+};
+
 const documentScopeQuery = async (auth: AuthContext): Promise<DocumentQuery> => {
   if (auth.role === 'admin') return {};
 
@@ -283,6 +294,7 @@ export const listDocuments = async (
 export const createDocument = async (auth: AuthContext, payload: CreateDocumentPayload) => {
   const orderIdentifier = payload.orderId || payload.orderNumber;
   const order = await assertOrderScope(auth, orderIdentifier);
+  assertCompanyUploadAllowed(auth, order);
   const uploaderRole = uploaderRoleFor(auth, payload.uploaderRole);
   const orderNumber = normalizeOrderNumber(order?.orderNumber || payload.orderNumber || payload.orderId);
   const s3Key =
@@ -361,6 +373,7 @@ export const createDocument = async (auth: AuthContext, payload: CreateDocumentP
 export const uploadDocumentBinary = async (auth: AuthContext, payload: UploadDocumentBinaryPayload, fileBuffer: Buffer) => {
   const orderIdentifier = payload.orderId || payload.orderNumber;
   const order = await assertOrderScope(auth, orderIdentifier);
+  assertCompanyUploadAllowed(auth, order);
   const uploaderRole = uploaderRoleFor(auth, payload.uploaderRole);
   const orderNumber = normalizeOrderNumber(order?.orderNumber || payload.orderNumber || payload.orderId);
   const s3Key = buildDocumentS3Key({

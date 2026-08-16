@@ -37,6 +37,16 @@ const orderLookupQuery = (value: string) => {
   return { orderNumber: { $in: [normalized, withHash, withoutHash] } };
 };
 
+const normalizeOrderNumberKey = (value: string) => value.trim().replace(/^#/, '').toUpperCase();
+
+const orderNumberVariants = (value: string) => {
+  const normalized = value.trim();
+  const withHash = normalized.startsWith('#') ? normalized : `#${normalized}`;
+  const withoutHash = normalized.replace(/^#/, '');
+
+  return [normalized, withHash, withoutHash];
+};
+
 const readableTime = (date: Date): string =>
   date.toLocaleString('en-US', {
     month: 'short',
@@ -132,7 +142,22 @@ export const listThreads = async (auth: CommunicationAuth) => {
 
   const query = auth.role === 'admin' ? {} : { notaryId: new Types.ObjectId(auth.id) };
   const threads = await CommunicationThread.find(query).sort({ lastMessageAt: -1, updatedAt: -1 });
-  const threadIds = threads.map((thread) => thread._id);
+  if (!threads.length) {
+    return [];
+  }
+
+  const orderNumberQuery = Array.from(new Set(threads.flatMap((thread) => orderNumberVariants(thread.orderNumber))));
+  const accessibleOrders = await Order.find(
+    auth.role === 'admin'
+      ? { orderNumber: { $in: orderNumberQuery } }
+      : { orderNumber: { $in: orderNumberQuery }, assignedNotaryId: new Types.ObjectId(auth.id) },
+  )
+    .select('orderNumber')
+    .lean();
+
+  const accessibleOrderKeys = new Set(accessibleOrders.map((order) => normalizeOrderNumberKey(order.orderNumber)));
+  const activeThreads = threads.filter((thread) => accessibleOrderKeys.has(normalizeOrderNumberKey(thread.orderNumber)));
+  const threadIds = activeThreads.map((thread) => thread._id);
 
   const unreadMatch =
     auth.role === 'admin'
@@ -147,7 +172,7 @@ export const listThreads = async (auth: CommunicationAuth) => {
     : [];
   const unreadByThread = new Map(unread.map((item) => [item._id.toString(), item.count]));
 
-  return threads.map((thread) => serializeThread(thread, unreadByThread.get(thread._id.toString()) ?? 0));
+  return activeThreads.map((thread) => serializeThread(thread, unreadByThread.get(thread._id.toString()) ?? 0));
 };
 
 export const getThreadMessages = async (auth: CommunicationAuth, orderNumber: string) => {

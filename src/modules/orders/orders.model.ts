@@ -65,6 +65,8 @@ export interface IOrder extends Document {
   signingDate: string;
   signingTime: string;
   price?: number;
+  companyFee?: number;
+  notaryFee?: number;
   loanType?: LoanType;
   scanbacksRequired: boolean;
   status: OrderStatus;
@@ -139,6 +141,8 @@ const orderSchema = new Schema<IOrder>(
     signingDate: { type: String, required: true, trim: true },
     signingTime: { type: String, required: true, trim: true },
     price: { type: Number, min: 0 },
+    companyFee: { type: Number, min: 0 },
+    notaryFee: { type: Number, min: 0 },
     loanType: { type: String, enum: loanTypes },
     scanbacksRequired: { type: Boolean, default: false },
     status: { type: String, enum: orderStatuses, default: 'Received', index: true },
